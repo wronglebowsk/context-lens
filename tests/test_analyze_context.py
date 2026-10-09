@@ -191,6 +191,39 @@ class TestCompositionAndHogs(unittest.TestCase):
             ac.find_latest_transcript("/no/such/file.jsonl")
 
 
+class TestTargetExtraction(unittest.TestCase):
+    def test_embedded_task_description_marker_does_not_hijack_target(self):
+        # Regression: a payload that merely *contains* the literal
+        # "Task Description:" (e.g. viewing this script's own source, or a
+        # transcript dump) used to be matched mid-line and returned garbage.
+        src = '    m = re.search(r"Task Description:\\s*(.+)", c)'
+        self.assertEqual(
+            ac.extract_target("VIEW_FILE", src,
+                              {"AbsolutePath": "/home/n100/analyze_context.py"}),
+            "/home/n100/analyze_context.py")
+        # No args and no line-leading marker -> nothing, not garbage.
+        self.assertEqual(ac.extract_target("GENERIC", src, {}), "")
+        # A genuine background notice (line-leading marker) still works.
+        self.assertEqual(
+            ac.extract_target("GENERIC", "Created At: x\nTask Description: pytest -q\n", {}),
+            "pytest -q")
+
+    def test_generic_view_file_uses_file_path_from_payload(self):
+        # A GENERIC-serialized view_file result should still parse "File Path:"
+        # via the paired call's effective type.
+        steps = [
+            planner(step_index=1, tool_calls=[
+                {"name": "view_file", "args": {"AbsolutePath": "/home/n100/other.py"}}]),
+            {"type": "GENERIC", "step_index": 2,
+             "content": "File Path: `file:///home/n100/real.py`\nTotal Lines: 3\n"},
+        ]
+        path = write_transcript(steps)
+        data = ac.analyze_steps(*ac.parse_transcript(path))
+        gen = [s for s in data["tool_results"] if s["type"] == "GENERIC"][0]
+        self.assertEqual(gen["label"], "view_file")
+        self.assertEqual(gen["target"], "/home/n100/real.py")
+
+
 class TestQuotaBurnRate(unittest.TestCase):
     """The burn-rate metric must come from a measured delta, never from
     account-wide usage divided by one session's tokens."""

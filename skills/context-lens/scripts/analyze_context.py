@@ -288,15 +288,19 @@ def extract_target(stype, content, args=None):
         if m:
             return m.group(1).strip()
 
-    # Marker shared by typed results and GENERIC-serialized ones.
-    m = re.search(r"Task Description:\s*(.+)", c)
-    if m:
-        return m.group(1).strip()
-
-    # Fall back to the requested call's arguments.
+    # Prefer the requested call's arguments (command line / path) over any
+    # free-text marker in the payload, so a payload that merely *contains* the
+    # text "Task Description:" (e.g. viewing this script's own source, or a
+    # transcript dump) cannot hijack the target.
     for key in ARG_TARGET_KEYS:
         if args.get(key):
             return str(args[key])
+
+    # Background-task notices carry the command after a line-leading marker.
+    # Anchored to line start so embedded occurrences are ignored.
+    m = re.search(r"^Task Description:\s*(.+)$", c, re.MULTILINE)
+    if m:
+        return m.group(1).strip()
 
     if stype in ("PLANNER_RESPONSE", "USER_INPUT"):
         return c.strip().replace("\n", " ")[:60]
@@ -432,6 +436,10 @@ def analyze_steps(steps, transcript_path, explicit_plan_path=None):
                 match_quality = "fifo"
                 tool_calls_matched += 1
             label = name or TYPE_LABELS["GENERIC"]
+            # Use the paired call's result type for target extraction, so a
+            # GENERIC-serialized view_file still gets its "File Path:" parsed
+            # rather than falling through to generic text handling.
+            eff_type = CALL_EXPECTED_TYPE.get(name, stype) if name else stype
             tool_category_totals[label] = tool_category_totals.get(label, 0) + chars
             ranked_steps.append({
                 "step_index": sidx,
@@ -439,7 +447,7 @@ def analyze_steps(steps, transcript_path, explicit_plan_path=None):
                 "label": label,
                 "requested_call": None,
                 "match_quality": match_quality,
-                "target": extract_target(stype, content, args),
+                "target": extract_target(eff_type, content, args),
                 "chars": chars,
                 "est_tokens": max(1, chars // 4),
                 "category": "tool",
