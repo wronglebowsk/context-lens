@@ -1,0 +1,19 @@
+{
+  "name": "context-lens",
+  "displayName": "Context Lens",
+  "version": "1.0.0",
+  "description": "Inspects session context window usage, token breakdown, prompt cache efficiency, baseline system overhead, and heavy tool consumers.",
+  "logo": "assets/logo.svg",
+  "suggestedPrompts": [
+    "/context",
+    "/context --timeline",
+    "Analyze which tools and steps consumed the most tokens in this conversation"
+  ],
+  "keywords": [
+    "context",
+    "tokens",
+    "prompt-cache",
+    "telemetry",
+    "analytics"
+  ]
+}

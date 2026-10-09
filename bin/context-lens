@@ -1,0 +1,12 @@
+#!/usr/bin/env bash
+# context-lens CLI wrapper
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+PYTHON_SCRIPT="$SCRIPT_DIR/skills/context-lens/scripts/analyze_context.py"
+
+if ! command -v python3 >/dev/null 2>&1; then
+    echo "Error: python3 is required to run context-lens." >&2
+    exit 1
+fi
+
+exec python3 "$PYTHON_SCRIPT" "$@"

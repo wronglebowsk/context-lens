@@ -1,0 +1,16 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" width="128" height="128">
+  <defs>
+    <linearGradient id="lensGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#4285F4"/>
+      <stop offset="50%" stop-color="#34A853"/>
+      <stop offset="100%" stop-color="#FBBC04"/>
+    </linearGradient>
+  </defs>
+  <!-- Outer Ring / Gauge -->
+  <circle cx="64" cy="64" r="50" fill="none" stroke="url(#lensGrad)" stroke-width="8" stroke-dasharray="240 70" stroke-linecap="round"/>
+  <!-- Inner Lens -->
+  <circle cx="64" cy="64" r="32" fill="#1e1e2e" stroke="#4285F4" stroke-width="4"/>
+  <!-- Focus Center / Crosshair -->
+  <circle cx="64" cy="64" r="8" fill="#34A853"/>
+  <path d="M64 26 L64 38 M64 90 L64 102 M26 64 L38 64 M90 64 L102 64" stroke="#4285F4" stroke-width="4" stroke-linecap="round"/>
+</svg>
