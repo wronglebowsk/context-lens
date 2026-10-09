@@ -10,6 +10,8 @@ When the user runs `/context`, execute the `context-lens` script on the active s
 - `--timeline`, `-t`: Display turn-by-turn context growth and cache checkpoints.
 - `-H <count>`: Number of context hogs to display (default: 5).
 - `--json`, `-j`: Output raw machine-readable JSON telemetry.
+- `--no-state`: Do not read or write the quota baseline state file (`~/.cache/context-lens`).
+- `--no-color`: Disable ANSI colors.
 
 ### Execution
 Run the analysis script:
