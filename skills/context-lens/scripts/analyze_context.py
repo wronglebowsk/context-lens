@@ -66,10 +66,21 @@ def color_supported():
 TOOL_RESULT_TYPES = {
     "RUN_COMMAND", "VIEW_FILE", "CODE_ACTION", "GREP_SEARCH",
     "LIST_DIRECTORY", "SEARCH_WEB", "READ_URL_CONTENT",
-    "GENERIC",  # background-task / task-management notices
+    "GENERIC",  # in some transcript variants, ALL tool results serialize as GENERIC
 }
 # Steps that inject system context back into the prompt.
 INJECTED_TYPES = {"EPHEMERAL_MESSAGE", "SYSTEM_MESSAGE", "CHECKPOINT"}
+
+# Tool results come in two flavours across transcript variants:
+#  - dedicated typed steps (RUN_COMMAND, VIEW_FILE, ...), and
+#  - GENERIC steps, when the CLI serializes every tool result as GENERIC
+#    (verified 1:1 against requested tool calls in real transcripts).
+TYPED_RESULT_TYPES = TOOL_RESULT_TYPES - {"GENERIC"}
+
+# Argument keys to fall back on for a step's target when the payload itself has
+# no explicit marker (e.g. the command line for a run_command result).
+ARG_TARGET_KEYS = ("CommandLine", "AbsolutePath", "TargetFile", "DirectoryPath",
+                   "Path", "query", "Url", "toolSummary")
 
 # Friendly labels for the raw step `type`.
 TYPE_LABELS = {
@@ -243,15 +254,17 @@ def detect_implementation_plan(artifact_dir, explicit_plan_path=None):
     return None
 
 
-def extract_target(stype, content):
-    """Best-effort human-readable target for a step (file path, command, ...)."""
+def extract_target(stype, content, args=None):
+    """Best-effort human-readable target for a step (file path, command, ...).
+
+    Prefers explicit markers in the result payload, then falls back to the
+    requested call's arguments (e.g. the command line) so that GENERIC-serialized
+    tool results still get a meaningful target.
+    """
     c = content or ""
+    args = args or {}
     if stype == "VIEW_FILE":
         m = re.search(r"File Path:\s*`?file://([^`\n]+)", c)
-        if m:
-            return m.group(1).strip()
-    if stype in ("RUN_COMMAND", "GENERIC"):
-        m = re.search(r"Task Description:\s*(.+)", c)
         if m:
             return m.group(1).strip()
     if stype == "CODE_ACTION":
@@ -274,19 +287,31 @@ def extract_target(stype, content):
         m = re.search(r"content=(.{0,60})", c)
         if m:
             return m.group(1).strip()
+
+    # Marker shared by typed results and GENERIC-serialized ones.
+    m = re.search(r"Task Description:\s*(.+)", c)
+    if m:
+        return m.group(1).strip()
+
+    # Fall back to the requested call's arguments.
+    for key in ARG_TARGET_KEYS:
+        if args.get(key):
+            return str(args[key])
+
     if stype in ("PLANNER_RESPONSE", "USER_INPUT"):
         return c.strip().replace("\n", " ")[:60]
     return ""
 
 
 def _match_call(pending, stype):
-    """Return (index, name, quality) of the best pending tool call for a result."""
-    for i, name in enumerate(pending):
+    """Return (index, name, args) of the pending tool call whose expected result
+    type matches this step, else (None, None, None).
+
+    Used for *typed* result steps. GENERIC results carry no type information, so
+    they are paired by FIFO order instead (see analyze_steps)."""
+    for i, (name, args) in enumerate(pending):
         if CALL_EXPECTED_TYPE.get(name) == stype:
-            return i, name, "matched"
-    # A bare FIFO guess is deliberately NOT made: interleaved results make it
-    # unreliable (it produced nonsense attributions like a view_file call
-    # owning a background-task notice).
+            return i, name, args
     return None, None, None
 
 
@@ -310,6 +335,14 @@ def analyze_steps(steps, transcript_path, explicit_plan_path=None):
     metered = []               # planner responses that carried token fields
     unmetered_planner = 0
     first_metered = None
+
+    # Transcripts come in two variants. If ANY typed result step exists, tool
+    # results are the typed steps and GENERIC steps are task/background notices
+    # (matching them to calls would steal the call from its real result). If no
+    # typed step exists at all, every tool result serializes as GENERIC and the
+    # GENERIC steps align 1:1 with the requested calls in order.
+    has_typed_results = any(s.get("type") in TYPED_RESULT_TYPES for s in steps)
+    tool_result_encoding = "typed" if has_typed_results else "generic"
 
     for s in steps:
         stype = s.get("type")
@@ -350,7 +383,7 @@ def analyze_steps(steps, transcript_path, explicit_plan_path=None):
 
             for tc in (s.get("tool_calls") or []):
                 tool_calls_requested += 1
-                pending_calls.append(tc.get("name"))
+                pending_calls.append((tc.get("name"), tc.get("args") or {}))
 
             if assistant_chars:
                 ranked_steps.append({
@@ -365,24 +398,48 @@ def analyze_steps(steps, transcript_path, explicit_plan_path=None):
                     "category": "assistant",
                 })
 
-        elif stype in TOOL_RESULT_TYPES:
+        elif stype in TYPED_RESULT_TYPES:
             chars = len(content)
             composition["tool"] += chars
             label = TYPE_LABELS.get(stype, stype)
-            tool_category_totals[label] = tool_category_totals.get(label, 0) + chars
 
-            idx, name, quality = _match_call(pending_calls, stype)
+            idx, name, args = _match_call(pending_calls, stype)
+            match_quality = None
             if idx is not None:
                 pending_calls.pop(idx)
                 tool_calls_matched += 1
+                match_quality = "typed"
 
+            tool_category_totals[label] = tool_category_totals.get(label, 0) + chars
             ranked_steps.append({
                 "step_index": sidx,
                 "type": stype,
                 "label": label,
                 "requested_call": name,
-                "match_quality": quality,
-                "target": extract_target(stype, content),
+                "match_quality": match_quality,
+                "target": extract_target(stype, content, args),
+                "chars": chars,
+                "est_tokens": max(1, chars // 4),
+                "category": "tool",
+            })
+
+        elif stype == "GENERIC":
+            chars = len(content)
+            composition["tool"] += chars
+            name, args, match_quality = None, {}, None
+            if tool_result_encoding == "generic" and pending_calls:
+                name, args = pending_calls.pop(0)
+                match_quality = "fifo"
+                tool_calls_matched += 1
+            label = name or TYPE_LABELS["GENERIC"]
+            tool_category_totals[label] = tool_category_totals.get(label, 0) + chars
+            ranked_steps.append({
+                "step_index": sidx,
+                "type": stype,
+                "label": label,
+                "requested_call": None,
+                "match_quality": match_quality,
+                "target": extract_target(stype, content, args),
                 "chars": chars,
                 "est_tokens": max(1, chars // 4),
                 "category": "tool",
@@ -491,6 +548,7 @@ def analyze_steps(steps, transcript_path, explicit_plan_path=None):
         "conversation_id": conv_id,
         "transcript_path": transcript_path,
         "total_steps": len(steps),
+        "tool_result_encoding": tool_result_encoding,
         "token_metering_available": metering_available,
         "metered_turns": len(metered),
         "unmetered_planner_turns": unmetered_planner,
@@ -658,7 +716,7 @@ def print_cli_report(data, top_hogs=5, show_timeline=False):
                 t_target = t_target[:47] + "..."
             via = ""
             if item.get("requested_call"):
-                qmark = "" if item.get("match_quality") == "matched" else "?"
+                qmark = "" if item.get("match_quality") == "typed" else "?"
                 via = f" {DIM}← {item['requested_call']}{qmark}{RESET}"
             cat = item["category"]
             cat_tag = "" if cat == "tool" else f" {DIM}[{cat}]{RESET}"

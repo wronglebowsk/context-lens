@@ -15,6 +15,24 @@
 - **Turn-by-Turn Timeline**: Inspect how your context accumulated turn-by-turn.
 - **Interactive Slash Command**: Access directly from the CLI or IDE via `/context`.
 
+### Transcript variants
+
+Antigravity serializes tool results in one of two ways, and Context Lens
+handles both:
+
+- **Typed results** — dedicated step types (`RUN_COMMAND`, `VIEW_FILE`,
+  `CODE_ACTION`, `GREP_SEARCH`, `LIST_DIRECTORY`, `SEARCH_WEB`,
+  `READ_URL_CONTENT`). Each result is paired with the tool call that requested
+  it by matching the call name to the expected result type; `GENERIC` steps are
+  background-task notices.
+- **GENERIC results** — every tool result is serialized as `type: "GENERIC"`.
+  Here the `GENERIC` steps align 1:1 with the requested tool calls, so they are
+  paired by order and labelled with the real tool name, with the target taken
+  from the call's arguments (command line, file path, …).
+
+The encoding is auto-detected per transcript and reported as
+`tool_result_encoding` in `--json` output.
+
 ### A note on token metering
 
 Antigravity only attaches `input_tokens` / `cache_read_tokens` /

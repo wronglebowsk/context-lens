@@ -89,7 +89,7 @@ class TestToolAttribution(unittest.TestCase):
         hogs = [s for s in data["tool_results"] if s["type"] == "VIEW_FILE"]
         self.assertEqual(len(hogs), 1)
         self.assertEqual(hogs[0]["requested_call"], "view_file")
-        self.assertEqual(hogs[0]["match_quality"], "matched")
+        self.assertEqual(hogs[0]["match_quality"], "typed")
         self.assertEqual(hogs[0]["target"], "/home/n100/run_all_evals.py")
 
     def test_assistant_narration_does_not_steal_the_call(self):
@@ -112,12 +112,53 @@ class TestToolAttribution(unittest.TestCase):
         self.assertEqual(narration["category"], "assistant")
         self.assertNotEqual(narration.get("requested_call"), "view_file")
 
-    def test_generic_notice_is_not_a_tool_result(self):
-        # GENERIC steps are background-task notices, not a specific tool result.
+    def test_generic_is_a_notice_when_typed_results_exist(self):
+        # In a transcript that serializes tool results as typed steps, a GENERIC
+        # step is a task/background notice and must not steal the pending call.
         steps = [
             planner(step_index=1, tool_calls=[{"name": "view_file", "args": {}}]),
             {"type": "GENERIC", "step_index": 2,
-             "content": "Task is running as a background task with task id: t-1"},
+             "content": "Tool is running as a background task with task id: t-1"},
+            {"type": "VIEW_FILE", "step_index": 3,
+             "content": "File Path: `file:///home/n100/x.py`\n"},
+        ]
+        path = write_transcript(steps)
+        data = ac.analyze_steps(*ac.parse_transcript(path))
+        self.assertEqual(data["tool_result_encoding"], "typed")
+        gen = [s for s in data["tool_results"] if s["type"] == "GENERIC"][0]
+        self.assertEqual(gen["label"], "task_notice")
+        self.assertIsNone(gen["requested_call"])
+        vf = [s for s in data["tool_results"] if s["type"] == "VIEW_FILE"][0]
+        self.assertEqual(vf["requested_call"], "view_file")
+
+    def test_generic_only_transcript_pairs_results_to_tool_calls(self):
+        # Variant where every tool result serializes as GENERIC: results align
+        # 1:1 with the requested calls, so they must get the real tool name and
+        # a target from the call arguments (not a bare "task_notice").
+        steps = [
+            planner(step_index=1, tool_calls=[
+                {"name": "view_file", "args": {"AbsolutePath": "/home/n100/run.py"}}]),
+            {"type": "GENERIC", "step_index": 2,
+             "content": "File Path: `file:///home/n100/run.py`\n" + "z" * 500},
+            planner(step_index=3, tool_calls=[
+                {"name": "run_command", "args": {"CommandLine": "pytest -q"}}]),
+            {"type": "GENERIC", "step_index": 4,
+             "content": "The command completed successfully.\nOutput:\nok"},
+        ]
+        path = write_transcript(steps)
+        data = ac.analyze_steps(*ac.parse_transcript(path))
+        self.assertEqual(data["tool_result_encoding"], "generic")
+        by_step = {s["step_index"]: s for s in data["tool_results"] if s["type"] == "GENERIC"}
+        self.assertEqual(by_step[2]["label"], "view_file")
+        self.assertEqual(by_step[2]["match_quality"], "fifo")
+        self.assertEqual(by_step[2]["target"], "/home/n100/run.py")
+        self.assertEqual(by_step[4]["label"], "run_command")
+        self.assertEqual(by_step[4]["target"], "pytest -q")
+
+    def test_unpaired_generic_in_generic_transcript_is_task_notice(self):
+        steps = [
+            planner(step_index=1, content="no calls here"),
+            {"type": "GENERIC", "step_index": 2, "content": "orphan notice"},
         ]
         path = write_transcript(steps)
         data = ac.analyze_steps(*ac.parse_transcript(path))
