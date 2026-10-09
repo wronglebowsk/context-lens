@@ -1,7 +1,7 @@
 {
   "name": "context-lens",
   "displayName": "Context Lens",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "Inspects session context window usage, token breakdown, prompt cache efficiency, baseline system overhead, and heavy tool consumers.",
   "logo": "assets/logo.svg",
   "suggestedPrompts": [
